@@ -1,0 +1,383 @@
+---
+output:
+  html_document:
+    title: 'AmesHousingPrice'
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    toc_collapsed: true
+    theme: lumen
+    #highlight: tango
+---
+
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 16px;
+  }
+td {  /* Table  */
+  font-size: 8px;
+}
+h1.title {
+  font-size: 24px;
+  color: DarkRed;
+}
+h1 { /* Header 1 */
+  font-size: 24px;
+  color: DarkBlue;
+}
+h2 { /* Header 2 */
+  font-size: 20px;
+  color: DarkBlue;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+
+<B><FONT color = "white">
+Hai Vu</FONT></B>
+<BODY>
+<CENTER>
+<B>  
+Northeastern University</B>  
+
+Ames Housing Price Analysis<br>
+Hai Vu  
+
+<B></B>
+
+</CENTER>
+</BODY>
+
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+rm(list=ls())
+library(RColorBrewer)
+library(xlsx)
+library(gmodels)
+library(knitr)
+library(ggplot2)
+library(ggpubr)
+library(hrbrthemes)
+library(dplyr)
+library(corrplot)
+library(tidyverse)
+library(tibble)
+library(psych)
+library(Rmisc)
+library(vcd)
+library(MASS)
+library(leaps)
+library(plm)
+library(mctest)
+library(car)
+
+```
+
+# I. INTRODUCTION SECTION  
+
+<BODY>
+
+<p align="justify"><FONT style="margin-left: 30px">The data set contains from the Ames Assessor’s Office used in computing assessed values for individual residential properties sold in Ames, Iowa from 2006 to 2010.</FONT> Based on the given variables, this project hopes to generate predictions for housing sales price using the lease squares regression models. The independent variable in this case will be "SalePrice", while other variables are considered potential predictors.</p>  
+
+</BODY>
+
+# II. ANALYSIS SECTION    
+
+## P1. Load the dataset
+```{r message=FALSE, warning=FALSE}
+# Data set loaded 
+df1 <- read.csv("AmesHousing.csv", check.names=F)
+df_test <- distinct(df1) # remove duplicates (if any)
+tibble::glimpse(df_test)
+```
+
+<BR>P1 Observations:</BR>  
+
+- The given data set contains no duplicates as there are no changes when using function distinct()  
+- There are a total of 2930 observations and 82 variables  
+
+## P2. Perform EDA and show descriptive statistics
+
+```{r message=FALSE, warning=FALSE}
+# Irregularities found in houses with living area > 4000 (as instructed in the text file)
+highlight_df <- df_test %>%
+  filter(`Gr Liv Area`> 4000)
+
+df_test %>%
+  ggplot(aes(x=`Gr Liv Area`,y=SalePrice/1000)) +
+  geom_point(alpha=0.3,
+             color="blue") +
+  geom_point(data=highlight_df,
+             aes(x=`Gr Liv Area`,y=SalePrice/1000),
+             color="red",
+             size=2) +
+  xlab("General Living Area (sqft)") +
+  ylab("Sales Price (in thousands)")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Remove rows with living area > 4000
+df_main <- df_test %>%
+  filter(`Gr Liv Area`<= 4000)
+
+df_char <- select_if(df_main,is.character)
+df_num <- select_if(df_main,is.numeric)
+
+# Show descriptive statistics of the numerical values
+num_stats <- describe(df_num)[,c('n','mean','median','sd','min','max')]
+num_stats
+
+```
+```{r message=FALSE, warning=FALSE}
+# Show descriptive statistics of the categorical values
+char_uniq <- as.matrix(lengths(lapply(df_char,unique)))
+char_n <- describe(df_char)[,c('n')]
+char_stats <- cbind(char_uniq,char_n)
+colnames(char_stats) <- c("Unique","Count")
+char_stats
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Distribution of independent variable SalePrice
+par(mai=c(0.7,1,0.7,0.5),mfrow=c(2,1))
+boxplot(df_main$SalePrice,horizontal=T,main="Boxplot of Sales Price distribution",col="#FFCCFF")
+
+points(mean(df_main$SalePrice),y=1,col="red",pch=16)
+text(mean(df_main$SalePrice),y=1.15,round(mean(df_main$SalePrice)),pos=3,cex=0.7,col="red")
+
+hist(df_main$SalePrice,breaks=30,main="Histogram of Sales Price distribution",ylab="Frequency",xlab="",col="#FFCCFF")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Normalize sales price
+par(mai=c(1,0.5,1,0.5),mfrow=c(1,2))
+hist(log(df_main$SalePrice),xlim=c(9,14),main="Logarith Normalization",col="lightblue")
+hist(sqrt(df_main$SalePrice),main="Square Root Normalization",col="lightgreen")
+
+```
+<BR>P2 Observations:</BR>  
+
+- I was able to locate 5 irregular points when plotting the "SalePrice" vs the "Gr Liv Area" (highlighted red in the scatter plot). I decided to remove these 5 points by removing rows with "Gr Liv Area" that are larger than 4000 to form a new data set  
+- From the new data set, there are 43 categorical variables and 39 numerical variables  
+- Descriptive statistics of numerical variables show the count, mean, median, standard deviation, minimum and maximum values for each column. Descriptive statistics of categorical variables show the number of unique values and the count (excluding NAs) for each column. Both shows that there are some missing values in the data set  
+- The distribution of the independent variable SalePrice seems to be right-skewed (median < mean), so we should normalize it before performing our regression analysis  
+- The square root normalization method seems to work better, so I will choose the square root of SalePrice as my final independent variable for this assignment  
+
+
+## P3. Replace missing values
+```{r message=FALSE, warning=FALSE}
+# Replace missing values with NA for categorical variables
+# Replace missing values with the variable's mean for numerical variables
+
+dummy1 <- matrix()
+for (i in 1:length(df_main)) {
+  dummy1 <- as.matrix(df_main[,i])
+  if (is.character(dummy1)==T) {  
+    dummy1[is.na(dummy1)] <- NA
+    df_main[,i] <- dummy1
+  } else {
+    dummy1[is.na(dummy1)] <- round(mean(dummy1, na.rm=T))
+    df_main[,i] <- dummy1
+  }
+}
+
+# Updated data set
+df_char <- select_if(df_main,is.character)
+df_num <- select_if(df_main,is.numeric)
+
+```
+<BR>P3 Observations:</BR>  
+
+- Missing values in numerical variables are replaced by the variable's mean  
+- Missing values in numerical variables are replaced by "NA"  
+
+## P4. Produce correlation matrix
+```{r message=FALSE, warning=FALSE}
+cors <- cor(df_num, use="pairwise")
+
+```
+
+## P5. Produce a plot of the correlation matrix
+```{r message=FALSE, warning=FALSE}
+corrplot(cors,type="upper",tl.cex=0.7,number.cex=0.7,col=brewer.pal(8,"RdYlBu"))
+corrplot(cors,method="number",type="upper",tl.cex=0.7,number.cex=0.7,col=brewer.pal(8,"RdYlBu"))
+```
+<BR>P5 Observations:</BR>  
+
+- Looking at the "SalePrice" column (last column in the matrix), we can observe which variables have high/low correlations with the sales price based on the circle colors  
+- We should exclude the "Order" and "PID" variables since the identification numbers don't provide much values here  
+- For instance, it seems that "SalesPrice" is positively correlated with "Overall Qual" the most. It is negatively correlated with "Enclosed Porch" and "Kitchen AbvGr" the most. Finally, "SalePrice" is moderately correlated with "Mas Vnr Area", where the correlation coefficient is close to 0.5.
+
+## P6. Scatter plots with SalePrice
+```{r message=FALSE, warning=FALSE}
+# Scatter plot between SalePrice and highest correlated variable (closest to 1)
+scatterplot(SalePrice ~ `Overall Qual`, data=df_main)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Scatter plot between SalePrice and lowest correlated variable (closest to -1)
+scatterplot(SalePrice ~ `Enclosed Porch`, data=df_main,col="red")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Scatter plot between SalePrice and moderately high correlated variable (closest to 0.5)
+scatterplot(SalePrice ~ `Mas Vnr Area`, data=df_main,col="darkgreen")
+
+```
+<BR>P6 Observations:</BR>  
+
+- Scatterplots of "SalePrice" vs "Overall Qual" and "SalePrice" vs "Mas Vnr Area" show a positively correlated relationship with the regression line in blue going upward from left to right  
+- Scatterplot of "SalePrice" vs "Enclosed Porch" shows a negatively correlated relationship with the regression line in blue going downward from left to right  
+
+
+## P7. Fit a regression model
+
+```{r message=FALSE, warning=FALSE}
+# Fit a regression model
+fit_1 <- lm(SalePrice~ `Overall Qual`+ `Lot Area` + as.factor(Utilities) + `Enclosed Porch`, data=df_main)
+summary(fit_1)
+
+```
+
+## P8. Analyze the regression model  
+<BR>P8 Observations:</BR>  
+
+- The equation form of the model is [SalePrice] = -1.072e+05 + 4.39e+04&lowast;[Overall Qual] + 2.08e+00&lowast;[Lot Area] -4.87e+04&lowast;[Utilities == "NoSeWa"] -3.51e+04&lowast;[Utilities == "NoSeWr"] - 3.03e+01&lowast;[Enclosed Porch]  
+- Based on this equation, we can assume that that Overal Quality and the Lot Area of the house help increase the sale price, while the number of enclosed porch decreases the sale price. We can also see that as opposed to having all public ultilities, having less utilities also decrease the sale price of the house.  
+- Among the 4 chosen variables, "Utilities" is considered statistically insignificant since its p-value is greater than 0.05, while all other variables are significant  
+- The R-squared and adjusted R-squared of the model, which describe how well the model fits into the given data set, are roughly 0.69. Therefore, we can state that this model can explain up to 69% of the variability in SalePrice around its mean. This shows that our current model has quite high accuracy   
+
+
+## P9. Plot your regression model
+```{r message=FALSE, warning=FALSE}
+# Plot regression model
+par(mai=c(0.7,0.8,0.4,0.4),mfrow = c(2,2))
+plot(fit_1)
+
+```
+<BR>P9 Observations:</BR>  
+
+- The Residuals vs Fitted plot: This plot shows whether there exist some non-linear patterns among the residuals. If no non-linear relationships exist, the residual values should spread randomly around the horizontal line. In this case, it seems that there does exist some sort of non-linear patterns since the residuals spread wider as the fitted values increase  
+- The Normal QQ plot: This plot shows whether the residuals are normally distributed based on how straight the residual values follow the dotted line. In this case, the residuals seem to be normally distributed for the most part, with the exception of the data points in the tail-end. I will keep this in mind when revising my model  
+- The Scale-Location plot: This plot checks the assumption of equal variance among the predictors (homoscedasticity), it's generally good to see a horizontal line with equally (randomly) spread points. In this case, the horizontal lines trend upward, informing us of potential unequal variances among the selected predictors  
+- The Residual vs Leverage plot: This plot helps to determine influential cases, where if we were to exclude them from the model, it will significantly changes the outcome of the future models. These influential cases are typically represented in the upper and lower right corner of the chart, outside of the red-dotted lines. In this case, there are no huge influential cases found (Kim, 2015)  
+
+## P10. Check for multicollinearity
+```{r message=FALSE, warning=FALSE}
+# Check for multicollinearity
+# omcdiag(fit_1)
+# imcdiag(fit_1)
+vif(fit_1)
+
+```
+
+<BR>P10 Observations:</BR>  
+
+<BODY>
+<p align="justify"><FONT style="margin-left: 30px">I want to test whether there are multicollinearity occurrences within this model by looking at the Variation Inflation Factor (VIF) for each of the independent variable in the model using function vif().</FONT> The VIF shows what percentage the variance is inflated by for each coefficient if there was no correlation with other predictors. As a rule of thumb, the VIF values are interpreted as (Glen, 2015):  
+
+- 1 = not correlated  
+- Between 1 and 5 = moderately correlated  
+- Greater than 5 = highly correlated  
+
+We should consider removing variables with VIF value greater than 5 to avoid multicollinearity. We can observe from question 10 results that all of the VIF values (GVIF column) are close to 1. Therefore, our current model seems to have no problem with multicollinearity and we don't need to remove any predictors.</p>
+
+</BODY>
+
+## P11. Check for outliers
+
+<BODY>
+<p align="justify"><FONT style="margin-left: 30px">This was done previously in P2, where I removed 5 outliers with general living area greater than 4000 square feet.</FONT> 
+</p>
+</BODY>
+
+## P12. Improve the exisiting model
+```{r message=FALSE, warning=FALSE}
+# Improve the regression model
+fit_2 <- lm(sqrt(SalePrice)~ `Overall Qual`+ `Lot Area` + as.factor(Utilities) + `Enclosed Porch` + `Gr Liv Area` + `Mas Vnr Area`, data=df_main)
+summary(fit_2)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Check for normality, variance, and extreme cases
+par(mai=c(0.7,0.8,0.4,0.4),mfrow = c(2,2))
+plot(fit_2)
+
+```
+<BR>P12 Observations:</BR>  
+
+- In my attempt to improve my model, I decided to use square root of SalePrice as my independent variable and add "Gr Liv Area" and "Mas Vnr Area" as new predictors to my model  
+- The R-squared in this new model increases to roughly 0.81 from 0.69, which means there are some improvements made in terms of accuracy compared to the previous model  
+- Looking at the regression plots, there are definitely improvements as observed in the Residuals vs Fitted plot as well as the Scale-Location plot, where the non-linear patterns seem to have been removed and the predictors have roughly equal variances.  
+
+
+## P13. Use subsets regression method to determine the "best" model
+
+```{r message=FALSE, warning=FALSE}
+# Determine the 4 best predictors
+leaps <- regsubsets(sqrt(SalePrice)~ `Overall Qual`+ `Lot Area` + as.factor(Utilities) + `Enclosed Porch` + `Gr Liv Area` + `Mas Vnr Area`, data=df_main, nvmax = 4)
+summary(leaps)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Regression results
+fit_3 <- lm(sqrt(SalePrice)~ `Overall Qual`+ `Lot Area` + `Gr Liv Area` + `Mas Vnr Area`, data=df_main)
+summary(fit_3)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Check for normality, variance, and extreme cases
+par(mai=c(0.7,0.8,0.4,0.4),mfrow = c(2,2))
+plot(fit_3)
+
+```
+```{r message=FALSE, warning=FALSE}
+# Check for multicollinearity
+vif(fit_3)
+
+```
+<BR>P13 Observations:</BR>  
+
+- Using the function regsubsets(), I want to determine the 4 best predictors to be used in my regression model. Those 4 predictors, from best to least-best, are as follow: "Overall Qual" (Rates the overall material and finish of the house), "Lot Area" (Lot size), "Gr Liv Area" (Above ground living area), "Mas Vnr Area" (Masonry veneer area)  
+- All of the predictors are statistically significant, with no clear signs of abnormality, heteroscedasticity and multicollinearity  
+
+
+## P14. How do the models differ? Which one do you prefer and why?
+Q14 Observations:
+<BODY>
+<p align="justify"><FONT style="margin-left: 30px">Both models in P12 and P13 show significant improvements compared to the model in P7.</FONT> However, I think that the model from P13 requires less data input while still able to generate considerably accurate results. This can be seen in the difference between the R-squares of the models in P12 and P13, which is not that considerable (0.8099 vs 0.8069, respectively). Therefore, I prefer the model in P13 for its robustness and relatively high predictive power.</p>
+
+</BODY>
+
+
+# III. CONCLUSION SECTION
+
+<BODY>
+<p align="justify"><FONT style="margin-left: 30px">In conclusion, by incorporating more predictor variables, new regression models with higher accuracy could be generated to closely predict the housing sale price.</FONT> Following similar steps, I can conduct a stepwise selection method on all of the available dependent variables in the data set to pick out the most influential ones. From that, we can continue to refine our models by looking at the Variance Inflation Factor to help avoid multicollinearity. However, it's important to note that there are no single correct answer when choosing between these models since different contexts will require different models. When looking to achieve the most accurate results for research purposes, one should look to include as much significant predictors as possible; but when looking for fast predictions with limited data input, one should use a less complicated model with only the most effective predictors to conduct their regression analysis.</p>
+
+</BODY>
+
+# IV. REFERENCES
+
+<div style="padding-left: 30px; text-indent: -30px;", color="black">
+
+<p>Kim, B. (2015, September 21). <cite>Understanding Diagnostic Plots for Linear Regression Analysis.</cite> Research Data Services + Sciences. Retrieved January 17, 2022, from https://data.library.virginia.edu/diagnostic-plots/ </p> 
+
+<p>Glen, S. (2015, September 21). <cite>Variance inflation factor.</cite> Statistics How To. Retrieved January 16, 2022, from https://www.statisticshowto.com/variance-inflation-factor/</p>
+
+</div>
